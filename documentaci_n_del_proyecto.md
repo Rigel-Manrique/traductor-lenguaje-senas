@@ -18,119 +18,126 @@ Un sistema de visión por computadora y Machine Learning diseñado para traducir
 
 ## 📐 Arquitectura de Datos y Funcionamiento
 
-1. **Extracción de Coordenadas:** MediaPipe detecta **21 puntos de referencia (landmarks)** en la mano por cada fotograma. Cada punto contiene coordenadas tridimensionales $(x, y, z)$, lo que genera un vector de **63 características** ($21 \times 3$).
-2. **Inferencia con IA:** El vector de 63 coordenadas se procesa a través de un modelo **Random Forest**, evaluando la confianza probabilística de la predicción.
-3. **Lógica de Estabilización y Voz:**
-   * La seña debe mantener una confianza $\ge 70\%$ de forma continua durante un tiempo prefijado (ej. 0.6s - 1.0s) para confirmarse como una letra válida.
-   * Las letras confirmadas se agregan al acumulador de palabras en pantalla.
-   * Al presionar la barra espaciadora, el motor `pyttsx3` reproduce la palabra completa en un hilo secundario (`threading`) para no congelar la captura de video.
-4. **Registro de Métricas:** Cada traducción y evento se guarda en `sistema_senas.db` para evaluar latencias y porcentajes de precisión.
+1. **Extracción de Coordenadas:** MediaPipe detecta **21 puntos de referencia (landmarks)** en la mano por cada fotograma. Cada punto tiene coordenadas $(x, y, z)$: **63 valores** ($21 \times 3$). Los CSV guardan estas coordenadas **crudas**.
+2. **Normalización (`comun.py`):** Antes de entrenar y de predecir, los puntos se trasladan para que la muñeca sea el origen y se escalan según el tamaño de la mano. Así el modelo no depende de **dónde** está la mano en la imagen ni de **qué tan lejos** está de la cámara, algo clave cuando se mezclan datos de varias personas.
+3. **Ambas manos:** Al entrenar se añade una copia espejada de cada muestra, para que el modelo reconozca la seña con la mano derecha o con la izquierda.
+4. **Inferencia con IA:** El vector normalizado se procesa con un **Random Forest**, que entrega la letra y su confianza.
+5. **Lógica de Estabilización y Voz:**
+   * La seña debe mantener una confianza $\ge 70\%$ durante ~0.8 s para confirmarse.
+   * Mantener la seña **no** repite la letra; para escribir letras dobles (`LL`, `RR`) se baja la mano o se cambia de seña y se vuelve a hacer.
+   * Al presionar la barra espaciadora, `pyttsx3` reproduce la palabra completa en un hilo secundario.
+6. **Registro de Métricas:** Cada traducción se guarda en `sistema_senas.db` (local, no se sube a Git).
+
+> ⚠️ **Limitación conocida:** `J`, `Z`, `Ñ` (y en LSM también `K`, `Q`, `X`) llevan **movimiento**. Este sistema clasifica una sola imagen, así que solo aprende la posición final de esas letras.
 
 ---
 
 ## 📁 Estructura del Repositorio
 
 ```text
-lenguaje_senas/
-├── data/                      # Carpeta para datasets individuales de cada desarrollador
+traductor-lenguaje-senas/
+├── data/                      # Un CSV por persona: dataset_<nombre>.csv
+│   └── dataset_legado.csv     # Datos que ya existían antes de este flujo
 ├── hand_landmarker.task       # Modelo de MediaPipe para detección de manos
-├── capturar_dataset.py        # Script para recolección colaborativa de datos (27 letras)
-├── unir_datasets.py           # Script para fusionar múltiples archivos CSV en un máster
-├── entrenar_modelo.py         # Script para entrenar la IA con Scikit-Learn
-├── config_bd.py               # Módulo de inicialización y escritura en SQLite
-├── app_traductor_vivo.py      # Aplicación principal (Cámara + IA + Voz + DB)
-├── requirements.txt           # Dependencias del proyecto
-└── .gitignore                 # Archivos omitidos en la sincronización de Git
+├── comun.py                   # Constantes y normalización compartidas
+├── prueba_camara.py           # Prueba rápida de cámara + detección
+├── capturar_dataset.py        # Captura de datos de una persona
+├── unir_datasets.py           # Une los CSV de data/ (y de las ramas) en el maestro
+├── entrenar_modelo.py         # Entrena y evalúa el modelo
+├── config_bd.py               # SQLite para métricas
+├── app_traductor_vivo.py      # Aplicación principal (Cámara + IA + Voz + BD)
+├── requirements.txt
+└── .gitignore
 ```
+
+Archivos **generados** que NO se suben a Git (cada quien los regenera): `dataset_senas.csv`, `modelo_senas.pkl`, `sistema_senas.db`.
 
 ---
 
-## 🚀 Guía de Instalación y Configuración
+## 🚀 Instalación
 
-### 1. Clonar el Repositorio
-```bash
-git clone https://github.com/tu-usuario/traductor-lenguaje-senas.git
+```powershell
+git clone https://github.com/Rigel-Manrique/traductor-lenguaje-senas.git
 cd traductor-lenguaje-senas
-```
-
-### 2. Crear y Activar el Entorno Virtual (`venv`)
-
-* **En Windows (PowerShell):**
-  ```powershell
-  python -m venv venv
-  .\venv\Scripts\Activate.ps1
-  ```
-* **En macOS / Linux:**
-  ```bash
-  python3 -m venv venv
-  source venv/bin/activate
-  ```
-
-### 3. Instalar Dependencias
-```bash
+python -m venv venv
+.\venv\Scripts\Activate.ps1
 pip install -r requirements.txt
+python prueba_camara.py      # verifica que la cámara y la detección funcionan
 ```
 
-> **Nota:** El archivo `hand_landmarker.task` debe estar ubicado en la raíz del proyecto. Si no existe, puedes descargarlo con el siguiente comando en PowerShell:
+> Si falta `hand_landmarker.task`:
 > ```powershell
 > Invoke-WebRequest -Uri 'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task' -OutFile 'hand_landmarker.task'
 > ```
 
 ---
 
-## 👥 Flujo de Trabajo Colaborativo (Git + Datasets)
+## 👥 Flujo colaborativo: cada persona en su rama
 
-Para lograr que el modelo sea **ambidiestro, robusto y multiusuario**, cada integrante del equipo debe aportar capturas utilizando sus propias manos bajo distintas condiciones de iluminación y distancia.
+Cada integrante tiene su rama `dataset_<Nombre>` en GitHub (`dataset_Gael`, `dataset_Jorge`, `dataset_Juan`, `dataset_Rigel`, `dataset_Rosado`, `dataset_rafael`). En su rama **solo sube su propio CSV**. Así nadie pisa los datos de otro y no hay conflictos de merge.
 
-### Paso 1: Captura de Datos Individual
-Cada desarrollador debe ejecutar en su máquina:
-```bash
-python capturar_dataset.py
+### Paso 1 — Ponerse en tu rama con el código actualizado
+```powershell
+git fetch origin
+git checkout dataset_Juan            # tu rama
+git merge origin/main                # trae la versión más reciente del código
 ```
-* **Abecedario soportado:** 27 letras (`A-Z` incluyendo la `Ñ`).
-* **Recomendación:** Capturar la mitad de las muestras con la mano izquierda y la otra mitad con la mano derecha. Mover ligeramente la mano durante el conteo para capturar variaciones de distancia e inclinación.
 
-### Paso 2: Guardar y Subir el CSV Personalizado
-1. Renombra el archivo generado `dataset_senas.csv` con tu nombre o usuario de Git (ejemplo: `data/dataset_juan.csv`).
-2. Sube únicamente tu CSV individual a Git:
-   ```bash
-   git add data/dataset_juan.csv
-   git commit -m "feat: Agregar capturas de datos de Juan (Mano izq/der)"
-   git push origin tu-rama
-   ```
-
-### Paso 3: Unificación de Datasets (Líder del Proyecto / Integración)
-Una vez reunidos los CSVs de todo el equipo en la carpeta `data/`:
-```bash
-python unir_datasets.py
+### Paso 2 — Capturar tus datos
+```powershell
+python capturar_dataset.py --nombre juan
 ```
-Este script concatenará todos los datasets individuales y generará el archivo `dataset_senas.csv` maestro listo para el entrenamiento.
+* Se guarda en `data/dataset_juan.csv`. Si lo vuelves a ejecutar, **agrega** muestras sin borrar las anteriores.
+* Por cada letra: presiona **ESPACIO** para empezar, **S** para saltarla y **Q** para salir (lo capturado se conserva).
+* Para capturar solo algunas letras: `python capturar_dataset.py --nombre juan --letras J Z Ñ --muestras 150`
+* **Para que el modelo sea robusto:** cambia de mano a mitad de la captura, acerca y aleja la mano, gírala un poco y captura en distintos lugares e iluminaciones (varias sesiones son mejores que una sola).
 
----
+### Paso 3 — Subir SOLO tu CSV a tu rama
+```powershell
+git add data/dataset_juan.csv
+git commit -m "datos: capturas de Juan"
+git push origin dataset_Juan
+```
+> No subas `dataset_senas.csv`, `modelo_senas.pkl` ni `sistema_senas.db` (el `.gitignore` ya los excluye).
 
-## 🤖 Entrenamiento del Modelo de IA
-
-Con el archivo `dataset_senas.csv` maestro listo, ejecuta el script de entrenamiento:
-
-```bash
+### Paso 4 — Integración (una persona, en `main`)
+No hace falta hacer merge de las ramas: el script descarga el CSV de cada rama directamente.
+```powershell
+git checkout main
+python unir_datasets.py --desde-ramas
 python entrenar_modelo.py
 ```
+`unir_datasets.py` valida columnas y etiquetas, repara la `Ñ`, elimina duplicados y muestra una tabla de **muestras por letra y por persona** para ver quién debe capturar más de qué letra.
 
-* **Salida esperada:** La terminal mostrará el porcentaje de precisión (*Accuracy Score*) global y generará el binario `modelo_senas.pkl`.
+Para guardar los datos de todos en `main` (opcional), copia cada CSV a `data/`:
+```powershell
+git checkout origin/dataset_Juan -- data/dataset_juan.csv
+```
 
 ---
 
-## 🎯 Ejecución de la Aplicación en Tiempo Real
+## 🤖 Entrenamiento del Modelo
 
-Para iniciar el traductor en vivo con voz:
+```powershell
+python entrenar_modelo.py
+```
+Muestra dos evaluaciones:
+1. **División aleatoria 80/20:** suele salir muy alta porque mezcla fotogramas casi idénticos de una misma persona.
+2. **Deja-una-persona-fuera:** entrena sin una persona y prueba con ella. **Es la medida real** de qué tan bien funcionará con alguien nuevo. Si una persona sale baja, hacen falta más datos variados.
 
-```bash
+Genera `modelo_senas.pkl` (incluye el modelo, la lista de letras y las personas usadas).
+
+---
+
+## 🎯 Aplicación en Tiempo Real
+
+```powershell
 python app_traductor_vivo.py
 ```
 
-### 🎮 Controles de la Aplicación:
-* **Haz clic sobre la ventana de la cámara** para asegurar el foco de los comandos por teclado.
-* **Mantén la seña fija (~0.6s - 1s):** La letra se agregará automáticamente al acumulador.
-* **[ BARRA ESPACIADORA ]:** Pronuncia la palabra completa acumulada en voz alta mediante síntesis TTS y registra el evento en la base de datos `sistema_senas.db`.
-* **Tecla [ C ]:** Borra la última letra si te equivocaste al deletrear.
-* **Tecla [ Q ]:** Cierra la aplicación y libera los recursos de la cámara.
+* **Haz clic sobre la ventana de la cámara** para que funcionen las teclas.
+* **Mantén la seña (~0.8 s):** la letra se agrega a la palabra.
+* **[ ESPACIO ]:** pronuncia la palabra completa y la registra en `sistema_senas.db`.
+* **[ C ]:** borra la última letra.
+* **[ Q ]:** salir.
+* En pantalla la `Ñ` aparece como `NY` (OpenCV no puede dibujar ese carácter); en la voz y en la base de datos se guarda como `Ñ`.

@@ -1,0 +1,10 @@
+# Python
+__pycache__/
+*.pyc
+venv/
+.venv/
+
+# Archivos generados localmente (cada quien los regenera)
+sistema_senas.db
+dataset_senas.csv
+modelo_senas.pkl
